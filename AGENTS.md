@@ -28,7 +28,7 @@ src/
 **`activate(context)`** — entry point:
 
 1. Derives `windowExtHostLogDir` from `context.logUri` (per-window; critical for finding the correct log).
-2. Sets up status bar, four commands, and cross-window state sync via `watchState.json` in `globalStorageUri`.
+2. Sets up status bar, six commands, ntfy auth secret storage, and cross-window state sync via `watchState.json` in `globalStorageUri`.
 
 **Poll loop (`pollLog`)** — runs on `setInterval` (default 5 000 ms):
 
@@ -38,12 +38,13 @@ src/
 
 **Pending state machine** — module-level vars track one in-flight job plus delayed wait-state notifications (`pendingCcreqLine`, `pendingTurnCount`, `pendingJobStartMs`, `pendingPromptFiltered`, question-wait state, terminal-wait state).
 
-**`sendNtfy`** — raw `http`/`https` POST (no fetch/axios) with duplicate-send guard (`lastNotifKey` + `lastNotifTs` in `watchState.json`, 5 s window).
+**`sendNtfy`** — raw `http`/`https` POST (no fetch/axios) with duplicate-send guard (`lastNotifKey` + `lastNotifTs` in `watchState.json`, 5 s window) and optional `Authorization` header loaded from VS Code `SecretStorage`.
 
 ## Conventions
 
 - **Cross-window IPC**: file-system-based (`watchState.json` + `fs.watchFile` polling at 500 ms) — no VS Code messaging APIs.
 - **Zero runtime dependencies**: only Node built-ins (`fs`, `path`, `http`, `https`) and the VS Code API.
+- **Secrets live in `SecretStorage`**: ntfy credentials must never be stored in settings, shared state, or logs.
 - **All regexes pre-compiled** at module load — never use `new RegExp(...)` per line.
 - **`utils.ts` must stay VS Code-free** so it can be tested with plain `node --test`.
 - **BYOK model alias**: `gpt-4o->gpt-4o-2024` is normalised to `gpt-4o` (take the part before `->`) in `parseJobInfo`.

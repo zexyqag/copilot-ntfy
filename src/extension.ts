@@ -47,10 +47,13 @@ let extensionContext: vscode.ExtensionContext;
 
 // ── Shared state (cross-window IPC) ──────────────────────────
 const SHARED_STATE_FILE = "watchState.json";
+const NTFY_AUTH_SECRET_KEY = "ntfyAuthorizationHeader";
 const NOTIF_DEDUP_MS = 5000;
 const QUESTION_NOTIFY_DELAY_MS = 60000;
 const TERMINAL_WAIT_NOTIFY_DELAY_MS = 30000;
 const NON_COMPLETION_NOTIFICATIONS_ENABLED = false;
+
+type NtfyAuthMethod = "none" | "bearer" | "basic";
 
 interface SharedStateData {
   isWatching: boolean;
@@ -64,7 +67,17 @@ function getSharedStatePath(): string {
 
 function readSharedStateData(): SharedStateData {
   try {
-    return JSON.parse(fs.readFileSync(getSharedStatePath(), "utf8"));
+    const raw = JSON.parse(fs.readFileSync(getSharedStatePath(), "utf8"));
+    if (!raw || typeof raw !== "object") {
+      return { isWatching: false };
+    }
+    return {
+      isWatching: raw.isWatching === true,
+      lastNotifKey:
+        typeof raw.lastNotifKey === "string" ? raw.lastNotifKey : undefined,
+      lastNotifTs:
+        typeof raw.lastNotifTs === "number" ? raw.lastNotifTs : undefined,
+    };
   } catch {
     return { isWatching: false };
   }
@@ -113,6 +126,8 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("copilotNtfy.startWatching", startWatching),
     vscode.commands.registerCommand("copilotNtfy.stopWatching", stopWatching),
     vscode.commands.registerCommand("copilotNtfy.setTopic", promptForTopic),
+    vscode.commands.registerCommand("copilotNtfy.configureAuth", configureAuth),
+    vscode.commands.registerCommand("copilotNtfy.testNotification", sendTestNotification),
     vscode.commands.registerCommand("copilotNtfy.openSettings", () =>
       vscode.commands.executeCommand("workbench.action.openSettings", "@ext:MrCarrotLabs.copilot-ntfy")
     )
@@ -189,6 +204,11 @@ function getNtfyServer(): string {
   return getConfig().get<string>("ntfyServer", "https://ntfy.sh").trim();
 }
 
+function getNtfyAuthMethod(): NtfyAuthMethod {
+  const method = getConfig().get<string>("ntfyAuthMethod", "none");
+  return method === "bearer" || method === "basic" ? method : "none";
+}
+
 function getPollInterval(): number {
   return getConfig().get<number>("pollIntervalMs", 5000);
 }
@@ -213,6 +233,136 @@ async function promptForTopic(): Promise<string | undefined> {
     return input.trim();
   }
   return undefined;
+}
+
+async function configureAuth(): Promise<void> {
+  const currentMethod = getNtfyAuthMethod();
+  const selection = await vscode.window.showQuickPick(
+    [
+      {
+        label: "No auth",
+        description: currentMethod === "none" ? "Current" : "",
+        method: "none" as const,
+      },
+      {
+        label: "Bearer token",
+        description: currentMethod === "bearer" ? "Current" : "",
+        method: "bearer" as const,
+      },
+      {
+        label: "Basic auth",
+        description: currentMethod === "basic" ? "Current" : "",
+        method: "basic" as const,
+      },
+    ],
+    {
+      title: "Copilot Ntfy — Configure ntfy Auth",
+      placeHolder: "Choose how Copilot Ntfy should authenticate to your ntfy server",
+      ignoreFocusOut: true,
+    }
+  );
+
+  if (!selection) return;
+
+  if (selection.method === "none") {
+    await extensionContext.secrets.delete(NTFY_AUTH_SECRET_KEY);
+    await getConfig().update(
+      "ntfyAuthMethod",
+      "none",
+      vscode.ConfigurationTarget.Global
+    );
+    vscode.window.showInformationMessage("Copilot Ntfy: ntfy auth cleared.");
+    return;
+  }
+
+  let authorizationHeader = "";
+
+  if (selection.method === "bearer") {
+    const token = await vscode.window.showInputBox({
+      title: "Copilot Ntfy — Bearer Token",
+      prompt: "Enter the ntfy access token to send as a Bearer token",
+      password: true,
+      ignoreFocusOut: true,
+      validateInput: (value) =>
+        value.trim() ? undefined : "Token cannot be empty",
+    });
+
+    if (token === undefined) return;
+    authorizationHeader = `Bearer ${token.trim()}`;
+  }
+
+  if (selection.method === "basic") {
+    const username = await vscode.window.showInputBox({
+      title: "Copilot Ntfy — Basic Auth Username",
+      prompt: "Enter the username for your ntfy server",
+      ignoreFocusOut: true,
+      validateInput: (value) =>
+        value.trim() ? undefined : "Username cannot be empty",
+    });
+
+    if (username === undefined) return;
+
+    const password = await vscode.window.showInputBox({
+      title: "Copilot Ntfy — Basic Auth Password",
+      prompt: "Enter the password for your ntfy server",
+      password: true,
+      ignoreFocusOut: true,
+      validateInput: (value) =>
+        value.trim() ? undefined : "Password cannot be empty",
+    });
+
+    if (password === undefined) return;
+
+    const encoded = Buffer.from(
+      `${username.trim()}:${password.trim()}`,
+      "utf8"
+    ).toString("base64");
+    authorizationHeader = `Basic ${encoded}`;
+  }
+
+  await extensionContext.secrets.store(
+    NTFY_AUTH_SECRET_KEY,
+    authorizationHeader
+  );
+  await getConfig().update(
+    "ntfyAuthMethod",
+    selection.method,
+    vscode.ConfigurationTarget.Global
+  );
+  vscode.window.showInformationMessage(
+    `Copilot Ntfy: ntfy ${selection.method} auth configured.`
+  );
+}
+
+async function sendTestNotification(): Promise<void> {
+  const topic = getTopic();
+  if (!topic) {
+    const newTopic = await promptForTopic();
+    if (!newTopic) {
+      vscode.window.showWarningMessage(
+        "Copilot Ntfy: No topic set — test notification cancelled."
+      );
+      return;
+    }
+  }
+
+  const workspace = vscode.workspace.workspaceFolders?.[0]?.name ?? "";
+  const authMethod = getNtfyAuthMethod();
+  const methodLabel = authMethod === "none" ? "no auth" : authMethod;
+  const msgLines = workspace
+    ? [workspace, `Test notification via ${methodLabel}.`]
+    : [`Test notification via ${methodLabel}.`];
+
+  await sendNtfy(
+    "Copilot Ntfy Test",
+    msgLines.join("\n"),
+    "default",
+    "test_tube,robot"
+  );
+
+  vscode.window.showInformationMessage(
+    "Copilot Ntfy: Test notification request sent."
+  );
 }
 
 // ── Start / Stop (core polling, no UI side-effects) ──────────
@@ -543,12 +693,12 @@ function handleJobComplete(job: JobInfo) {
   const workspace = vscode.workspace.workspaceFolders?.[0]?.name ?? "";
   const meta = `${job.model} · ${job.duration}`;
   const msgLines = workspace ? [workspace, meta] : [meta];
-  sendNtfy("Copilot Job Finished", msgLines.join("\n"), "default", "robot,white_check_mark");
+  void sendNtfy("Copilot Job Finished", msgLines.join("\n"), "default", "robot,white_check_mark");
 }
 
 function sendNonCompletionNtfy(title: string, body: string, priority = "default", tags = "robot,white_check_mark") {
   if (!NON_COMPLETION_NOTIFICATIONS_ENABLED) return;
-  sendNtfy(title, body, priority, tags);
+  void sendNtfy(title, body, priority, tags);
 }
 
 function handleJobCancelled(job: JobInfo) {
@@ -613,10 +763,39 @@ function handleTerminalWait(job: JobInfo) {
 }
 
 // ── Send ntfy notification ────────────────────────────────────
-function sendNtfy(title: string, body: string, priority = "default", tags = "robot,white_check_mark") {
+async function sendNtfy(title: string, body: string, priority = "default", tags = "robot,white_check_mark") {
   const server = getNtfyServer();
   const topic = getTopic();
   if (!topic) return;
+
+  let url: URL;
+  try {
+    const normalizedServer = server.endsWith("/") ? server : `${server}/`;
+    url = new URL(topic.replace(/^\/+/, ""), normalizedServer);
+  } catch {
+    vscode.window.showWarningMessage(
+      `Copilot Ntfy: Invalid ntfy server URL — "${server}". Please check your settings.`
+    );
+    return;
+  }
+
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    vscode.window.showWarningMessage(
+      `Copilot Ntfy: Unsupported ntfy server URL scheme — "${url.protocol}". Use http or https.`
+    );
+    return;
+  }
+
+  const authMethod = getNtfyAuthMethod();
+  const authHeader = authMethod === "none"
+    ? undefined
+    : await extensionContext.secrets.get(NTFY_AUTH_SECRET_KEY);
+  if (authMethod !== "none" && !authHeader) {
+    vscode.window.showWarningMessage(
+      "Copilot Ntfy: ntfy auth is enabled but no credentials are stored. Run 'Copilot Ntfy: Configure ntfy Auth'."
+    );
+    return;
+  }
 
   // Dedup: skip if the exact same notification was already sent within NOTIF_DEDUP_MS
   // (guards against two extension instances — e.g. installed + dev host — double-firing)
@@ -627,36 +806,31 @@ function sendNtfy(title: string, body: string, priority = "default", tags = "rob
     return;
   }
   writeSharedStateData({ ...state, lastNotifKey: notifKey, lastNotifTs: now });
-
-  let url: URL;
-  try {
-    url = new URL(`${server}/${topic}`);
-  } catch {
-    vscode.window.showWarningMessage(
-      `Copilot Ntfy: Invalid ntfy server URL — "${server}". Please check your settings.`
-    );
-    return;
-  }
   const isHttps = url.protocol === "https:";
   const lib = isHttps ? https : http;
 
   const bodyBuf = Buffer.from(body, "utf8");
+  const headers: http.OutgoingHttpHeaders = {
+    "Content-Type": "text/plain",
+    "Content-Length": bodyBuf.length,
+    Title: title,
+    Priority: priority,
+    Tags: tags,
+  };
+
+  if (authHeader) {
+    headers.Authorization = authHeader;
+  }
 
   const options: http.RequestOptions = {
     hostname: url.hostname,
     port: url.port || (isHttps ? 443 : 80),
     path: url.pathname,
     method: "POST",
-    headers: {
-      "Content-Type": "text/plain",
-      "Content-Length": bodyBuf.length,
-      Title: title,
-      Priority: priority,
-      Tags: tags,
-    },
+    headers,
   };
 
-  const req = lib.request(options, (res) => {
+  const req = lib.request(options, (res: http.IncomingMessage) => {
     if (res.statusCode && res.statusCode >= 400) {
       vscode.window.showWarningMessage(
         `Copilot Ntfy: ntfy returned HTTP ${res.statusCode}`
@@ -669,7 +843,7 @@ function sendNtfy(title: string, body: string, priority = "default", tags = "rob
     req.destroy(new Error("ntfy request timed out after 10s"));
   });
 
-  req.on("error", (err) => {
+  req.on("error", (err: Error) => {
     vscode.window.showWarningMessage(`Copilot Ntfy: Request failed — ${err.message}`);
   });
 

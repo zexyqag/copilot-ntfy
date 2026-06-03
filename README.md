@@ -14,6 +14,8 @@ This VS Code extension watches the Copilot Chat log in the background and curren
 ## Features
 
 - **Phone notifications via ntfy** — works with any ntfy.sh topic or self-hosted server.
+- **Secure ntfy authentication** — supports Bearer tokens and Basic auth using VS Code secret storage.
+- **Built-in test notification** — verify ntfy setup immediately from the Command Palette.
 - **Completion-only notifications for now** — wait-state and failure notifications are temporarily disabled while their behavior is being revised.
 - **Job details included** — model name and elapsed duration in every notification.
 - **Multi-window safe** — deduplicates notifications across multiple VS Code windows.
@@ -32,7 +34,9 @@ This VS Code extension watches the Copilot Chat log in the background and curren
 1. Install the extension.
 2. Open the Command Palette (`⇧⌘P`) and run **Copilot Ntfy: Set ntfy Topic**.
 3. Enter your ntfy topic (e.g. `my-copilot-jobs`).
-4. Watching starts automatically. You'll see `Copilot Ntfy: 👁` in the status bar.
+4. If your ntfy server requires auth, run **Copilot Ntfy: Configure ntfy Auth** and choose Bearer token or Basic auth.
+5. Optionally run **Copilot Ntfy: Send Test Notification** to verify delivery immediately.
+6. Watching starts automatically. You'll see `Copilot Ntfy: 👁` in the status bar.
 
 ## Configuration
 
@@ -40,6 +44,7 @@ This VS Code extension watches the Copilot Chat log in the background and curren
 | ---------------------------- | ----------------- | -------------------------------------------------------- |
 | `copilotNtfy.ntfyServer`     | `https://ntfy.sh` | ntfy server URL (use your self-hosted URL if applicable) |
 | `copilotNtfy.ntfyTopic`      | _(empty)_         | ntfy topic to publish notifications to                   |
+| `copilotNtfy.ntfyAuthMethod` | `none`            | ntfy auth mode; credentials are managed via secret storage |
 | `copilotNtfy.pollIntervalMs` | `5000`            | How often to poll the log file in milliseconds           |
 | `copilotNtfy.autoStart`      | `false`           | Automatically start watching when VS Code opens          |
 
@@ -50,6 +55,8 @@ This VS Code extension watches the Copilot Chat log in the background and curren
 | `Copilot Ntfy: Start Watching` | Begin watching the Copilot Chat log |
 | `Copilot Ntfy: Stop Watching`  | Stop watching                       |
 | `Copilot Ntfy: Set ntfy Topic` | Set or update the ntfy topic        |
+| `Copilot Ntfy: Configure ntfy Auth` | Store or clear ntfy credentials securely |
+| `Copilot Ntfy: Send Test Notification` | Send a manual test notification to your ntfy topic |
 | `Copilot Ntfy: Open Settings`  | Open the extension settings page    |
 
 ## How it Works
@@ -70,7 +77,7 @@ No Copilot API calls are made; the extension is purely passive and read-only wit
 
 ## Privacy
 
-All notification traffic goes directly from your machine to your configured ntfy server. No data is sent to any third party by this extension.
+All notification traffic goes directly from your machine to your configured ntfy server. If you enable ntfy authentication, the credential is stored in VS Code secret storage instead of plaintext settings. No data is sent to any third party by this extension.
 
 ## License
 

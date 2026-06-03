@@ -50,6 +50,14 @@
         "title": "Copilot Ntfy: Set ntfy Topic"
       },
       {
+        "command": "copilotNtfy.configureAuth",
+        "title": "Copilot Ntfy: Configure ntfy Auth"
+      },
+      {
+        "command": "copilotNtfy.testNotification",
+        "title": "Copilot Ntfy: Send Test Notification"
+      },
+      {
         "command": "copilotNtfy.openSettings",
         "title": "Copilot Ntfy: Open Settings"
       }
@@ -66,6 +74,16 @@
           "type": "string",
           "default": "",
           "description": "ntfy topic to send notifications to"
+        },
+        "copilotNtfy.ntfyAuthMethod": {
+          "type": "string",
+          "default": "none",
+          "enum": [
+            "none",
+            "bearer",
+            "basic"
+          ],
+          "markdownDescription": "Authentication method for ntfy requests. Credentials are stored securely in VS Code secret storage. Use **Copilot Ntfy: Configure ntfy Auth** to update them."
         },
         "copilotNtfy.pollIntervalMs": {
           "type": "number",
